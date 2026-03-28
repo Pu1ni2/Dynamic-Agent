@@ -1,0 +1,17 @@
+{
+  "task": "Explain the current state of AI agent frameworks",
+  "agents": [
+    {
+      "role": "Researcher",
+      "goal": "Find key information about the topic"
+    },
+    {
+      "role": "Analyst",
+      "goal": "Analyze the research and find patterns"
+    },
+    {
+      "role": "Report Writer",
+      "goal": "Write a clear summary report"
+    }
+  ]
+}
