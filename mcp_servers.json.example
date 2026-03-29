@@ -1,0 +1,22 @@
+{
+  "filesystem": {
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-filesystem", "./output"]
+  },
+  "slack": {
+    "command": "npx",
+    "args": ["-y", "@anthropic/mcp-server-slack"]
+  },
+  "google-drive": {
+    "command": "npx",
+    "args": ["-y", "@anthropic/mcp-server-google-drive"]
+  },
+  "github": {
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-github"]
+  },
+  "notion": {
+    "command": "npx",
+    "args": ["-y", "@anthropic/mcp-server-notion"]
+  }
+}

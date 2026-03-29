@@ -22,3 +22,4 @@ class OrchestratorState(TypedDict):
     coverage_report: dict
     known_issues: Annotated[list, merge_lists]
     metadata: Annotated[dict, merge_dicts]
+    shared_memory: Annotated[dict, merge_dicts]

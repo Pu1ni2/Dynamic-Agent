@@ -19,10 +19,10 @@ from langgraph.checkpoint.memory import MemorySaver
 
 from .state import OrchestratorState
 from .agent_factory import make_agent_node
-from .compiler import compile_node
+from .compiler import compile_node, set_compiler_memory
 
 
-def build_graph(plan: dict, agent_bundles: dict[str, dict]):
+def build_graph(plan: dict, agent_bundles: dict[str, dict], memory=None):
     """Build and compile the orchestration graph.
 
     Parameters
@@ -36,12 +36,16 @@ def build_graph(plan: dict, agent_bundles: dict[str, dict]):
     -------
     Compiled LangGraph graph ready for .invoke().
     """
+    # Set compiler memory reference
+    if memory is not None:
+        set_compiler_memory(memory)
+
     graph = StateGraph(OrchestratorState)
 
     # ── Add agent nodes ─────────────────────────────────────────────────
     agent_ids = []
     for agent_id, bundle in agent_bundles.items():
-        node_fn = make_agent_node(agent_id, bundle)
+        node_fn = make_agent_node(agent_id, bundle, memory=memory)
         graph.add_node(agent_id, node_fn)
         agent_ids.append(agent_id)
 

@@ -1,5 +1,5 @@
 """
-All system prompts for the YCONIC orchestration engine.
+All system prompts for the HIVEMIND orchestration engine.
 Every phase of the pipeline — planning, evaluation, tool forging,
 sub-agent execution, and final compilation — is driven by these prompts.
 """
@@ -72,6 +72,11 @@ Rules
 - parallel_group numbers start at 1 and increase.  Lower groups run first.
 - Be creative with personas — give each agent real expertise and personality.
 - Ensure complete coverage of the task with no gaps.
+- If you receive RELEVANT PAST EXPERIENCE, use it to:
+  * Reuse agent structures that worked well for similar tasks
+  * Avoid approaches that failed previously
+  * Incorporate lessons learned from past executions
+  Do NOT copy past plans verbatim — adapt them to the current task.
 """
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -184,6 +189,58 @@ _OUTPUT_DIR -> str
     Path to the output directory.
 
 ═══════════════════════════════════════════════════════════════════════
+REAL-WORLD INTEGRATIONS (also pre-loaded in your function's scope):
+═══════════════════════════════════════════════════════════════════════
+
+_send_email(to: str, subject: str, body: str, cc: str = "", html: bool = False) -> str
+    Sends a REAL email via SMTP. If SMTP credentials aren't configured,
+    it saves the email as a draft file in output/.
+    USE THIS for candidate notifications, meeting invitations,
+    follow-ups, newsletters, alert emails.
+
+_send_slack(message: str, channel: str = "", blocks: list = None) -> str
+    Sends a REAL message to Slack via incoming webhook.
+    If webhook isn't configured, saves message to output/.
+    USE THIS for team notifications, status updates, alerts,
+    posting summaries to channels.
+
+_create_calendar_event(title: str, start: str, end: str = "", description: str = "", location: str = "", attendees: str = "") -> str
+    Creates a REAL .ics calendar event file that can be imported into
+    Google Calendar, Outlook, or Apple Calendar.
+    start/end format: "YYYY-MM-DD HH:MM" or "YYYY-MM-DD"
+    attendees: comma-separated email addresses.
+    USE THIS for scheduling meetings, interviews, events, deadlines.
+
+_parse_resume(text: str) -> str
+    Analyzes resume/CV text and extracts structured information:
+    contact info, education, experience, skills, certifications,
+    estimated years of experience.
+    USE THIS for hiring pipelines, candidate screening, talent analysis.
+
+_read_pdf(filepath: str) -> str
+    Reads and extracts text from a PDF file. Works with resumes,
+    reports, contracts, and other documents.
+    USE THIS to process uploaded PDF documents.
+
+_create_spreadsheet(filename: str, headers: list, rows: list, sheet_name: str = "Sheet1") -> str
+    Creates a REAL CSV or Excel (.xlsx) spreadsheet file.
+    headers: list of column header strings.
+    rows: list of lists (each inner list is a row).
+    USE THIS for data exports, reports, budgets, tracking sheets,
+    candidate databases, inventory lists.
+
+_send_webhook(url: str, payload: dict, method: str = "POST", headers: dict = None) -> str
+    Sends a REAL HTTP webhook to any external service.
+    USE THIS to trigger Zapier, IFTTT, custom APIs, n8n workflows,
+    or any third-party service integration.
+
+_create_kanban_board(title: str, columns: list[dict]) -> str
+    Creates a REAL interactive drag-and-drop Kanban board as HTML.
+    columns: [{"name": "To Do", "cards": [{"title": "...", "desc": "...", "tag": "..."}]}]
+    USE THIS for project management, task boards, hiring pipelines,
+    sprint planning, content calendars.
+
+═══════════════════════════════════════════════════════════════════════
 RULES
 ═══════════════════════════════════════════════════════════════════════
 1. The function MUST have a clear docstring.
@@ -204,9 +261,19 @@ THE MOST IMPORTANT RULES:
 - A "analyze_competitors" tool should _search() real competitors
   and _scrape() their actual websites.
 - A "create_budget" tool should _compute() real calculations
-  and _save_file() a real budget spreadsheet.
+  and _create_spreadsheet() to make a real budget file.
 - A "research_venues" tool should _search() real venues in the
   target city and return actual venue names, capacities, prices.
+- A "screen_candidates" tool should _parse_resume() to analyze
+  resume text and create a structured evaluation.
+- A "schedule_interview" tool should _create_calendar_event()
+  to create a real calendar invite with attendees.
+- A "notify_team" tool should _send_slack() to post updates
+  and _send_email() to send notifications to people.
+- A "setup_project_board" tool should _create_kanban_board()
+  to create an interactive project board.
+- A "export_data" tool should _create_spreadsheet() to create
+  a real Excel/CSV file with structured data.
 
 2. When saving files with _save_file(), save RICH, DETAILED content.
    NOT a 3-line summary — save the FULL analysis, report, or document.
@@ -281,6 +348,8 @@ You are **{role}**.
 
 {context_section}
 
+{memory_section}
+
 ─── AVAILABLE TOOLS ───
 {tool_names}
 
@@ -318,6 +387,8 @@ polished, professional deliverable.
 
 ─── AGENT OUTPUTS ───
 {agent_outputs}
+
+{memory_section}
 
 Instructions
 ------------

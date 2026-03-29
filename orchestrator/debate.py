@@ -15,7 +15,7 @@ from .utils import parse_json_response
 from .events import emit
 
 
-def run_debate(task: str) -> dict:
+def run_debate(task: str, memory_context: str = "") -> dict:
     """Run the DA <-> Evaluator debate and return the approved plan dict."""
 
     da_model = ChatOpenAI(
@@ -39,6 +39,8 @@ def run_debate(task: str) -> dict:
         SystemMessage(content=DA_PLAN_PROMPT),
         HumanMessage(content=f"Task:\n{task}"),
     ]
+    if memory_context:
+        da_messages.append(HumanMessage(content=f"RELEVANT PAST EXPERIENCE (use to inform your plan):\n{memory_context}"))
 
     da_response = da_model.invoke(da_messages)
     plan = parse_json_response(da_response.content)

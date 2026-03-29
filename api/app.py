@@ -24,8 +24,12 @@ from orchestrator.events import EventBus, set_bus
 from orchestrator.pipeline import run_task
 from orchestrator.capabilities import OUTPUT_DIR
 from orchestrator.config import OPENAI_API_KEY
+from orchestrator.memory import MemoryManager
 
-app = FastAPI(title="YCONIC")
+app = FastAPI(title="HIVEMIND")
+
+# ── Memory manager (persistent across runs) ───────────────────────
+memory_manager = MemoryManager(data_dir="data")
 
 # ── CORS (for hackathon demo flexibility) ─────────────────────────
 app.add_middleware(
@@ -63,7 +67,7 @@ class TaskRequest(BaseModel):
 async def run_task_endpoint(req: TaskRequest):
     loop = asyncio.get_event_loop()
     result = await loop.run_in_executor(
-        None, lambda: run_task(req.task, mcp_servers=req.mcp_servers)
+        None, lambda: run_task(req.task, mcp_servers=req.mcp_servers, memory=memory_manager)
     )
     return result
 
@@ -93,7 +97,7 @@ async def websocket_endpoint(ws: WebSocket):
             set_bus(bus)
             try:
                 bus.emit("pipeline_start", {"task": task, "session_id": session_id})
-                result = run_task(task, event_bus=bus)
+                result = run_task(task, event_bus=bus, memory=memory_manager)
                 result_holder["result"] = result
 
                 # Store session for interactive chat
@@ -104,6 +108,7 @@ async def websocket_endpoint(ws: WebSocket):
                     "agent_outputs": result.get("agent_outputs", {}),
                     "chat_histories": {},  # {agent_id: [messages]}
                     "created_at": time.time(),
+                    "episode_id": result.get("metadata", {}).get("episode_id", ""),
                 }
 
                 bus.emit("pipeline_done", {
@@ -267,6 +272,80 @@ async def read_output_file(filename: str):
     with open(resolved, "r", encoding="utf-8", errors="replace") as f:
         content = f.read()
     return {"name": safe_name, "content": content, "size": len(content)}
+
+
+# ── Memory API endpoints ────────────────────────────────────────────
+
+class FeedbackRequest(BaseModel):
+    episode_id: str
+    feedback: str
+    score: float  # 0.0 - 10.0
+
+
+@app.post("/api/feedback")
+async def submit_feedback(req: FeedbackRequest):
+    """User rates a completed task — creates learnings for future runs."""
+    try:
+        memory_manager.record_feedback(req.episode_id, req.feedback, req.score)
+        return {"status": "ok", "message": "Feedback recorded. Future runs will learn from this."}
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
+@app.get("/api/memory/episodes")
+async def list_episodes(limit: int = 20, domain: str | None = None):
+    """Browse past task executions."""
+    try:
+        episodes = memory_manager.get_episode_history(limit=limit, domain=domain)
+        return {
+            "episodes": [
+                {
+                    "episode_id": ep.episode_id,
+                    "task": ep.task[:200],
+                    "task_domain": ep.task_domain,
+                    "task_complexity": ep.task_complexity,
+                    "success_score": ep.success_score,
+                    "user_feedback": ep.user_feedback,
+                    "timestamp": ep.timestamp,
+                    "tags": ep.tags,
+                    "agent_count": len(ep.plan.get("agents", [])),
+                    "metadata": ep.metadata,
+                }
+                for ep in episodes
+            ]
+        }
+    except Exception as exc:
+        return {"episodes": [], "error": str(exc)}
+
+
+@app.get("/api/memory/search")
+async def search_memory(query: str, n_results: int = 5):
+    """Semantic search across all past experience."""
+    try:
+        results = memory_manager.search_memory(query, n_results=n_results)
+        return {"results": results}
+    except Exception as exc:
+        return {"results": [], "error": str(exc)}
+
+
+@app.get("/api/memory/stats")
+async def memory_stats():
+    """Get memory system statistics."""
+    try:
+        episodes = memory_manager.store.list_episodes(limit=1000)
+        entries = memory_manager.store.get_all_entries(limit=1000)
+        return {
+            "total_episodes": len(episodes),
+            "total_memory_entries": len(entries),
+            "entry_types": {
+                mtype: len([e for e in entries if e.memory_type == mtype])
+                for mtype in set(e.memory_type for e in entries)
+            } if entries else {},
+            "domains": list(set(ep.task_domain for ep in episodes if ep.task_domain)),
+            "vector_search_available": memory_manager.index.available,
+        }
+    except Exception as exc:
+        return {"error": str(exc)}
 
 
 # ── Serve frontend ──────────────────────────────────────────────────

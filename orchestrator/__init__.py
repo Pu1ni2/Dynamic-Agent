@@ -1,4 +1,4 @@
-"""YCONIC — Autonomous Multi-Agent Orchestration Engine."""
+"""HIVEMIND — Autonomous Multi-Agent Orchestration Engine."""
 
 from .pipeline import run_task
 

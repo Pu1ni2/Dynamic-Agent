@@ -15,6 +15,15 @@ from .utils import parse_json_response, truncate
 from .events import emit
 
 
+# Module-level reference to memory (set by graph_builder via make_compile_node)
+_memory = None
+
+
+def set_compiler_memory(memory):
+    global _memory
+    _memory = memory
+
+
 def compile_node(state: OrchestratorState) -> dict:
     """LangGraph node function. Assembles final deliverable."""
 
@@ -41,10 +50,26 @@ def compile_node(state: OrchestratorState) -> dict:
     for a in plan_agents:
         plan_summary += f"- {a['id']} ({a.get('role', '?')}): {a.get('objective', '?')}\n"
 
+    # Memory context for compiler
+    memory_section = ""
+    if _memory is not None:
+        compiler_ctx = _memory.get_compiler_context(state["task"])
+        if compiler_ctx:
+            memory_section = f"--- PAST COMPILATION INSIGHTS ---\n{compiler_ctx}"
+
+    # Include shared memory if agents stored anything
+    shared_mem = state.get("shared_memory", {})
+    if shared_mem:
+        memory_section += "\n\n--- SHARED WORKSPACE DATA ---\n"
+        for key, data in shared_mem.items():
+            val = data.get("value", str(data)) if isinstance(data, dict) else str(data)
+            memory_section += f"[{key}]: {val[:300]}\n"
+
     prompt = COMPILER_PROMPT.format(
         task=state["task"],
         plan_summary=plan_summary or "No plan details available",
         agent_outputs=agent_outputs_text or "No agent outputs available",
+        memory_section=memory_section,
     )
 
     messages = [

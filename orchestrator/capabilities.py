@@ -326,7 +326,7 @@ console.log('Form submitted:',JSON.stringify(data,null,2));
 this.style.display='none';
 document.getElementById('successMsg').style.display='block';
 // Store in localStorage as backup
-const key='yconic_form_'+Date.now();
+const key='hivemind_form_'+Date.now();
 localStorage.setItem(key,JSON.stringify(data));
 }});
 </script>
@@ -341,6 +341,7 @@ localStorage.setItem(key,JSON.stringify(data));
 # ═══════════════════════════════════════════════════════════════════
 
 CAPABILITY_NAMESPACE = {
+    # ── Core capabilities ──────────────────────────────────────────
     "_search": search_web,
     "_scrape": scrape_url,
     "_save_file": save_file,
@@ -351,3 +352,7 @@ CAPABILITY_NAMESPACE = {
     "_create_form": create_html_form,
     "_OUTPUT_DIR": OUTPUT_DIR,
 }
+
+# ── Merge real-world integrations (email, Slack, calendar, etc.) ──
+from .integrations import INTEGRATION_NAMESPACE
+CAPABILITY_NAMESPACE.update(INTEGRATION_NAMESPACE)
