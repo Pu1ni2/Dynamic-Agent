@@ -1,138 +1,308 @@
 # HiveMind
 
-**A dynamic multi-agent orchestration engine with adversarial debate, runtime tool forging, plan-driven sub-agent spawning, persistent cross-run memory, and real-world integration capabilities.**
+**Autonomous multi-agent orchestration with adversarial plan validation, runtime tool synthesis, RAG-enabled agents, persistent cross-run memory, and real-time execution streaming.**
 
-Built with LangGraph, FastAPI, and OpenAI GPT-4o.
-
----
-
-## The Problem
-
-Multi-agent AI systems fail in three recurring ways:
-
-1. **Static rosters** — Frameworks like CrewAI and AutoGen require agents to be predefined. The roster can't adapt to the task; the task is forced to fit the roster.
-2. **Unvalidated decomposition** — Orchestrators decompose tasks and execute immediately with no quality gate. Bad plans only fail at the end, after wasting time and tokens.
-3. **Memory isolation** — Sub-agents work in silos. Agent A produces research, Agent B never sees it. No framework learns across runs — every task starts cold.
+Live demo: [https://hivemind-v9fr.onrender.com](https://hivemind-v9fr.onrender.com)
 
 ---
 
-## How HiveMind Solves It
+## What is HiveMind?
 
-### Full Pipeline
+HiveMind is a general-purpose task execution engine. You give it any complex task in natural language; it figures out what agents to spawn, what tools those agents need, builds those tools from code it writes itself, debates its own plan before executing, and synthesises a final deliverable — all while streaming every decision to a live UI.
+
+It solves three failures common to every existing multi-agent framework:
+
+| Failure | Root cause | HiveMind's fix |
+|---|---|---|
+| Wrong agents for the task | Static predefined rosters | Agents are spawned at runtime from the plan |
+| Bad plans execute silently | No pre-execution review | Adversarial DA ↔ EA debate gate |
+| Agents work in silos | Isolated context windows | Shared workspace + cross-run episodic memory |
+
+---
+
+## Full Execution Pipeline
 
 ```
-Task Input
-    ↓
-Quick Classifier  (one tool call? skip the swarm)
-    ↓
-Adversarial Debate  (DA proposes → EA critiques → iterate up to 3 rounds)
-    ↓
-Tool Forge  (GPT-4o writes Python tools from specs, AST-validated)
-    ↓
-Agent Factory  (creates ReAct agents from approved plan)
-    ↓
-Graph Builder  (dependency-aware DAG, parallel where possible)
-    ↓
-Execution  (LangGraph state machine, shared workspace)
-    ↓
-Compiler  (synthesizes all agent outputs into final deliverable)
-    ↓
-Output  (with coverage report, known issues, recommendations)
+User Task (natural language)
+        │
+        ▼
+┌───────────────────┐
+│  Quick Classifier  │  GPT-4o, temp=0, JSON mode
+│  (quick_actions.py)│  Asks: can this be solved with 1-3 direct tool calls?
+└────────┬──────────┘
+         │ quick?          │ full pipeline?
+         ▼                 ▼
+   Direct execution   ┌─────────────────────┐
+   (send email,       │   Adversarial Debate  │
+    search web, etc.) │   (debate.py)         │
+                      │   DA proposes plan    │
+                      │   EA critiques 7 dims │
+                      │   ≤3 rounds, score≥6  │
+                      └──────────┬────────────┘
+                                 ▼
+                      ┌─────────────────────┐
+                      │    Tool Forge         │
+                      │  (tool_forge.py)      │
+                      │  GPT-4o writes Python │
+                      │  AST safety validation│
+                      │  Parallel (6 threads) │
+                      └──────────┬────────────┘
+                                 ▼
+                      ┌─────────────────────┐
+                      │   Agent Factory       │
+                      │  (agent_factory.py)   │
+                      │  create_react_agent() │
+                      │  per spec, forged     │
+                      │  tools + memory tools │
+                      └──────────┬────────────┘
+                                 ▼
+                      ┌─────────────────────┐
+                      │   Graph Builder       │
+                      │  (graph_builder.py)   │
+                      │  LangGraph StateGraph │
+                      │  dependency DAG       │
+                      │  cycle detection      │
+                      └──────────┬────────────┘
+                                 ▼
+                      ┌─────────────────────┐
+                      │    Execution          │
+                      │  LangGraph .invoke()  │
+                      │  parallel fan-out     │
+                      │  shared workspace     │
+                      │  token streaming      │
+                      └──────────┬────────────┘
+                                 ▼
+                      ┌─────────────────────┐
+                      │     Compiler          │
+                      │  (compiler.py)        │
+                      │  GPT-4o synthesises   │
+                      │  all agent outputs    │
+                      │  + coverage report    │
+                      └──────────┬────────────┘
+                                 ▼
+                       Final output + episode
+                       saved to memory
 ```
 
-### Key Innovations
-
-**1. Adversarial Debate Gate**
-Before any agent runs, a Dynamic Agent (DA) proposes a plan and a separate Evaluator Agent (EA) critiques it across 7 dimensions: coverage, agent roles, tool feasibility, dependency logic, overkill, underkill, and tool description specificity. The EA can rewrite the plan. Debate converges at score ≥ 6 with no CRITICAL issues, or after a hard cap of 3 rounds.
-
-**2. Quick Action Intelligence**
-A GPT-4o classifier checks whether the task needs a full swarm at all. If it can be resolved with 1–3 direct tool calls (send email, search web, create form), it executes those directly and returns — bypassing debate, forge, and graph construction entirely.
-
-**3. Runtime Tool Forge**
-Sub-agents never use hardcoded tools. After debate, the Tool Forge asks GPT-4o to write a Python function for each tool spec, validates it with `ast.parse()` + an AST visitor that blocks dangerous imports/calls, and execs it into a capability namespace. The result is a typed LangChain `StructuredTool`. Tools are cached by name.
-
-**4. Persistent Cross-Run Memory**
-Two memory layers run simultaneously:
-- **Short-term (intra-run):** Shared workspace — agents call `remember(key, value)` / `recall(key)` as injected LangChain tools
-- **Long-term (cross-run):** SQLite episodic store + ChromaDB vector search — episodes are distilled into `plan_pattern`, `lesson_learned`, `agent_strategy`, `user_preference` entries that shape future runs
-
-**5. Real-Time Transparency**
-Every phase streams to the frontend over WebSocket: debate rounds with character-level plan diffs, per-tool forge status, streaming agent tokens, tool call previews, and the final compiled output. Post-run, users can open an interactive chat with any individual agent.
+Everything from the debate through compilation streams to the frontend over a single WebSocket connection.
 
 ---
 
 ## Architecture
 
-### Agent Roles
-
-| Agent | Role | Config |
-|---|---|---|
-| Dynamic Agent (DA) | Proposes ExecutionPlan JSON, defends in debate | GPT-4o, temp 0.7, memory context injected |
-| Evaluator Agent (EA) | Adversarial reviewer, scores 7 dimensions, rewrites plan | GPT-4o, temp 0.3, "find problems" mandate |
-| Quick Classifier | Pre-pipeline mode selector (quick vs full_pipeline) | GPT-4o, temp 0, JSON mode |
-| Tool Forge | Generates Python tools from specs, AST-validates, execs | GPT-4o, temp 0, max_tokens 2048, 1 retry |
-| Sub-Agents (SA-1..N) | ReAct workers spawned from approved plan at runtime | create_react_agent(), MAX_AGENT_STEPS=25 |
-| Compiler | Synthesizes all agent outputs into coherent deliverable | GPT-4o, temp 0.3, JSON mode |
-| Memory Manager | Cross-run learning via SQLite + ChromaDB | Episodic store + semantic vector search |
-
-### Directory Structure
+### Module Map
 
 ```
-├── api/
-│   └── app.py               # FastAPI server (REST + WebSocket)
-├── orchestrator/
-│   ├── pipeline.py          # Main entry point: run_task()
-│   ├── debate.py            # DA ↔ EA debate loop
-│   ├── quick_actions.py     # Quick action classifier + executor
-│   ├── tool_forge.py        # LLM code generation → StructuredTool
-│   ├── agent_factory.py     # ReAct agent creation from specs
-│   ├── graph_builder.py     # LangGraph DAG construction
-│   ├── compiler.py          # Final output synthesis
-│   ├── capabilities.py      # 13 built-in capability functions
-│   ├── integrations.py      # Email, Slack, Calendar, webhooks
-│   ├── events.py            # WebSocket event bus
-│   ├── mcp_client.py        # Model Context Protocol client
-│   ├── state.py             # LangGraph state schema
-│   ├── config.py            # Models, limits, env loading
-│   └── memory/
-│       ├── store.py         # SQLite episodic storage
-│       ├── episodic.py      # Episode recording
-│       ├── long_term.py     # Cross-run learning
-│       ├── short_term.py    # Intra-run shared workspace
-│       └── embeddings.py    # ChromaDB semantic search
-├── frontend/
-│   ├── index.html           # Dashboard UI
-│   ├── css/style.css        # Dark-theme styling
-│   └── js/app.js            # WebSocket streaming + diff rendering
-├── main.py                  # CLI entry point
-├── run_server.py            # Start web server
-├── evaluate.py              # Single-LLM vs pipeline benchmark
-└── requirements.txt
+orchestrator/
+├── pipeline.py          Entry point: run_task(task, event_bus, memory)
+├── debate.py            DA ↔ EA adversarial debate loop
+├── quick_actions.py     Pre-pipeline classifier + direct executor
+├── tool_forge.py        LLM code generation → StructuredTool
+├── agent_factory.py     create_react_agent() per spec
+├── graph_builder.py     LangGraph StateGraph + cycle detection
+├── compiler.py          Final output synthesis node
+├── rag_engine.py        Per-agent document Q&A (ChromaDB + LLM)
+├── capabilities.py      13 built-in functions (search, file I/O, compute …)
+├── integrations.py      8 real-world integrations (email, Slack, calendar …)
+├── mcp_client.py        Model Context Protocol (stdio + SSE)
+├── events.py            Thread-safe EventBus for WebSocket streaming
+├── state.py             LangGraph OrchestratorState TypedDict
+├── prompts.py           All system prompts (DA, EA, agents, compiler, forge)
+├── config.py            Models, limits, env loading
+├── utils.py             parse_json_response, truncate, call_llm
+└── memory/
+    ├── __init__.py      MemoryManager — orchestrates all memory layers
+    ├── types.py         Episode, MemoryEntry, SharedMemoryItem dataclasses
+    ├── store.py         SQLite — episodes + distilled memory entries
+    ├── episodic.py      EpisodeRecorder — captures events during a run
+    ├── long_term.py     Cross-run learning — distill + retrieve patterns
+    ├── short_term.py    SharedWorkspace — in-run key-value store
+    └── embeddings.py    ChromaDB semantic index (optional, degrades gracefully)
+
+api/
+└── app.py               FastAPI server — REST + WebSocket + session management
+
+frontend/
+├── index.html           Dashboard UI
+├── css/style.css        Dark theme
+└── js/app.js            WebSocket client + real-time rendering
 ```
+
+### LangGraph State (`orchestrator/state.py`)
+
+```python
+class OrchestratorState(TypedDict):
+    task: str
+    plan: dict
+    agent_outputs: Annotated[dict, merge_dicts]   # parallel fan-in
+    shared_memory: Annotated[dict, merge_dicts]   # workspace snapshots
+    final_output: str
+    coverage_report: dict
+    known_issues: Annotated[list, merge_lists]
+    metadata: dict
+```
+
+`merge_dicts` and `merge_lists` are custom reducers that merge concurrent agent outputs without overwrites — essential for the parallel fan-out/fan-in pattern.
 
 ---
 
-## Built-In Capabilities
+## Core Components
 
-Available to all forged tools via capability namespace injection:
+### 1. Adversarial Debate (`orchestrator/debate.py`)
 
-| Capability | Description |
+The Dynamic Agent (DA) and Evaluator Agent (EA) are two separate GPT-4o instances with fundamentally different system prompts. The DA is optimised to plan; the EA is explicitly instructed to find problems.
+
+**DA config:** `temperature=0.7`, `response_format=json_object` — produces an `ExecutionPlan` JSON with agents, tools, dependencies, and model tiers.
+
+**EA config:** `temperature=0.3`, scores the plan across 7 dimensions:
+1. Coverage — does the plan address every aspect?
+2. Agent roles — right expertise, no redundancy?
+3. Tool feasibility — can each tool be a Python function?
+4. Dependency logic — correct ordering, maximum parallelism?
+5. Overkill — needlessly complex?
+6. Underkill — too thin for the task?
+7. Tool description specificity — vague descriptions catch here, not at forge time
+
+**Convergence:** `score >= 6` with no CRITICAL issues, or a hard cap of `MAX_DEBATE_ROUNDS = 3`. When the EA provides a `modified_plan` field, that rewritten plan is used directly — skipping a DA revision round.
+
+**Memory injection:** The DA's first prompt is augmented with `memory_context` — relevant past episodes and distilled plan patterns retrieved from `LongTermMemory`.
+
+### 2. Quick Action Intelligence (`orchestrator/quick_actions.py`)
+
+Before any debate starts, a GPT-4o classifier (temp=0, JSON mode) determines whether the task maps to 1–3 direct built-in tool calls. The full `_TOOL_MAP` contains 13 entries matching the capability and integration functions. If mode is `"quick"`, the actions are executed in sequence and the pipeline returns immediately.
+
+This eliminates unnecessary debate/forge/graph overhead for tasks like:
+- "Send an email to alice@example.com saying the meeting is cancelled"
+- "Create a calendar event for tomorrow at 3pm"
+- "Search the web for OpenAI pricing"
+
+The classifier decision (mode, reason, action list) is streamed to the frontend as `quick_detect_done`.
+
+### 3. Tool Forge (`orchestrator/tool_forge.py`)
+
+After the plan is approved, every `tools_needed` spec across all agents is collected. **All tools are forged in parallel** using a `ThreadPoolExecutor` with up to 6 workers — one thread per unique tool name.
+
+For each spec:
+1. GPT-4o (`FORGE_MODEL`, temp=0, max_tokens=2048) writes a Python function body matching the spec's name, description, parameters, and return type.
+2. `ast.parse()` validates syntax.
+3. An AST visitor walks the tree and blocks:
+   - **Forbidden imports:** `subprocess`, `shutil`, `ctypes`, `importlib`, `pickle`, `shelve`, `multiprocessing`, `signal`, `socket`
+   - **Forbidden calls:** `os.system`, `os.remove`, `os.rmdir`, `os.unlink`, `shutil.rmtree`, `__import__`, `eval`, `exec`
+4. `exec()` runs the code in a namespace pre-populated with `CAPABILITY_NAMESPACE` — the 13 real capability functions. This is what allows forged tools to call `search_web()`, `save_file()`, `compute()`, etc.
+5. The function is wrapped in `_make_safe_wrapper` (catches all exceptions, returns error strings) and converted to a `LangChain StructuredTool`.
+6. On any failure, one retry with the error message fed back to the LLM.
+
+Tools are cached by name — identical tools requested by multiple agents are generated once.
+
+### 4. Agent Factory (`orchestrator/agent_factory.py`)
+
+Each agent spec from the approved plan becomes a LangGraph `create_react_agent()` instance:
+
+- **Model selection:** `TIER_TO_MODEL` maps `FAST → gpt-4o-mini`, `BALANCED/HEAVY → gpt-4o`
+- **Tools:** forged tools + optional MCP tools + `remember`/`recall` memory tools
+- **Memory tools:** `remember(key, value, tags)` and `recall(key)` are `StructuredTool` instances backed by `SharedWorkspace`. Agents use these to pass data to downstream agents without needing direct message passing.
+- **System prompt:** `AGENT_SYSTEM_PROMPT` is formatted with role, persona, objective, tool list, and any relevant past experience retrieved from `LongTermMemory`.
+- **Streaming:** `AgentStreamHandler` (a `BaseCallbackHandler`) emits `agent_token`, `agent_tool_call`, and `agent_tool_result` events on every token and tool interaction.
+
+### 5. Graph Builder (`orchestrator/graph_builder.py`)
+
+Converts the flat agent list + dependency specs into a `LangGraph StateGraph`:
+
+1. **Cycle detection:** DFS over the `depends_on` map before adding any edges. Raises `ValueError` with the full cycle path if found.
+2. **Root agents** (no dependencies) get edges from `START` and run in parallel.
+3. **Dependency edges** connect each agent to its prerequisites — LangGraph's fan-in waits for all predecessors before firing a node.
+4. **Leaf agents** (nothing depends on them) connect to the `compiler` node.
+5. Compiled with `MemorySaver` for LangGraph checkpoint persistence.
+
+### 6. Compiler (`orchestrator/compiler.py`)
+
+The final node in the graph. Receives the full `OrchestratorState` (all agent outputs, shared workspace snapshot, plan) and calls GPT-4o (`COMPILER_MODEL`, temp=0.3, max_tokens=4096, JSON mode) to synthesise a structured deliverable:
+
+```json
+{
+  "final_output": "<markdown deliverable>",
+  "coverage_report": { "quality_assessment": "...", ... },
+  "known_issues": ["..."],
+  "recommendations": ["..."]
+}
+```
+
+Falls back to raw concatenation of agent outputs if JSON parsing fails — the compiler never crashes the pipeline.
+
+### 7. RAG Engine (`orchestrator/rag_engine.py`)
+
+Any agent can be given a persistent document knowledge base. Files are uploaded via `POST /api/agents/{agent_id}/upload` and indexed into a per-agent ChromaDB collection.
+
+**Supported formats:** PDF (via pdfplumber), Excel (via openpyxl), CSV, TXT, MD, JSON.
+
+**Chunking:** Text is split by paragraphs first, then sentences for oversized paragraphs. Overlapping windows (100-char overlap) prevent context loss at boundaries. Chunks are upserted in batches of 40.
+
+**Query flow:** ChromaDB retrieves the top-N most similar chunks by cosine distance. The LLM receives an identity-anchored system prompt (the agent's role + persona + objective) alongside the retrieved context, and is instructed to cite `[Source N]` references.
+
+### 8. Memory System (`orchestrator/memory/`)
+
+Two layers operate simultaneously:
+
+**Short-term — `ShortTermMemory` (`short_term.py`):**
+A thread-safe `SharedWorkspace` dict. Agents write with `remember(key, value, tags)` and read with `recall(key)`. The workspace is snapshotted into `OrchestratorState.shared_memory` after every agent node, so downstream agents always see what upstream agents stored.
+
+**Long-term — `LongTermMemory` (`long_term.py` + `store.py` + `embeddings.py`):**
+Every pipeline run is saved as an `Episode` in SQLite (`data/hivemind_memory.db`). After saving, `LongTermMemory.record_episode()` distills the episode into typed `MemoryEntry` records:
+
+| Type | Trigger | Used by |
+|---|---|---|
+| `plan_pattern` | Each run | DA — pre-planning context |
+| `lesson_learned` | Runs with known_issues | DA + compiler |
+| `agent_strategy` | Each agent's output | Agent factory — per-role context |
+| `user_preference` | User feedback via `/api/feedback` | DA — shapes future plans |
+
+Retrieval uses ChromaDB cosine search (if available) with SQLite full-text fallback. The DA, each agent, and the compiler each receive their own scoped context slice before execution.
+
+### 9. Event Bus (`orchestrator/events.py`)
+
+A thread-safe `queue.Queue`-backed `EventBus`. The pipeline thread calls `emit(event_type, data)` throughout execution; the WebSocket coroutine drains the queue and pushes JSON to the client. This decouples the synchronous pipeline from the async FastAPI layer.
+
+All 25+ event types are documented in the API reference below.
+
+### 10. MCP Integration (`orchestrator/mcp_client.py`)
+
+`load_mcp_tools(config)` supports both:
+- **stdio** — spawns a local process (`npx @modelcontextprotocol/server-filesystem`, etc.) and communicates over stdin/stdout
+- **SSE** — connects to a remote HTTP MCP server
+
+Each MCP tool is wrapped as a `LangChain StructuredTool` and added to every agent's tool list. If MCP is unavailable or the config file is missing, the system continues without it.
+
+---
+
+## Built-in Capabilities (`orchestrator/capabilities.py`)
+
+These 13 functions are injected into every forged tool's `exec()` namespace, making them callable from any LLM-generated code:
+
+| Function | What it does |
 |---|---|
-| `search_web(query)` | DuckDuckGo search with HTML fallback |
-| `scrape_url(url)` | Fetch + extract webpage text |
-| `save_file(filename, content)` | Write to `output/` (sandboxed) |
+| `search_web(query, max_results=8)` | DuckDuckGo Instant Answer + HTML scraping fallback |
+| `scrape_url(url, max_chars=8000)` | HTTP GET + BeautifulSoup text extraction |
+| `save_file(filename, content)` | Write to `output/` (path is sandboxed) |
 | `read_file(filepath)` | Read from `output/` |
-| `fetch_json(url)` | HTTP GET → JSON |
-| `compute(code_str)` | Restricted Python (math, stats, datetime) |
-| `create_html_form(...)` | Generate interactive HTML forms |
-| `send_email(...)` | SMTP email (degrades to draft file) |
-| `send_slack_message(...)` | Slack webhook (degrades to draft file) |
-| `create_calendar_event(...)` | `.ics` file for Google/Outlook/Apple |
-| `create_spreadsheet(...)` | CSV/Excel via openpyxl |
-| `create_kanban_board(...)` | Interactive drag-and-drop HTML board |
-| `read_pdf(filepath)` | PDF text extraction via pdfplumber |
+| `list_files(directory="")` | List `output/` contents |
+| `fetch_json(url)` | HTTP GET → parsed JSON |
+| `compute(code_str)` | Restricted Python eval — math, statistics, datetime, collections, re, json |
+| `create_html_form(filename, title, fields, submit_action)` | Dark-themed HTML form with localStorage |
 
-All integrations degrade gracefully — useful artifacts are always produced even without external credentials.
+## Real-World Integrations (`orchestrator/integrations.py`)
+
+| Function | What it does | Fallback |
+|---|---|---|
+| `send_email(to, subject, body, cc, html)` | SMTP (Gmail-compatible) | Draft file in `output/` |
+| `send_slack_message(message, channel)` | Webhook POST | Draft file in `output/` |
+| `create_calendar_event(title, start, end, ...)` | `.ics` file | Always works |
+| `create_spreadsheet(filename, headers, rows)` | Excel via openpyxl or CSV | CSV fallback |
+| `create_kanban_board(title, columns)` | Drag-and-drop HTML board | Always works |
+| `send_webhook(url, payload)` | HTTP POST to any URL | — |
+| `read_pdf(filepath)` | Text extraction via pdfplumber | PyPDF2 fallback |
+| `parse_resume(text)` | Email, phone, sections, years of experience | Always works |
+
+Every integration degrades gracefully — a useful artifact is always produced.
 
 ---
 
@@ -140,37 +310,56 @@ All integrations degrade gracefully — useful artifacts are always produced eve
 
 ### REST
 
-| Method | Endpoint | Description |
+| Method | Path | Description |
 |---|---|---|
-| `POST` | `/api/run` | Synchronous task execution |
-| `POST` | `/api/chat` | Chat with an individual agent post-run |
+| `POST` | `/api/run` | Synchronous task execution (REST fallback for WebSocket) |
+| `POST` | `/api/chat` | Chat with a specific agent post-run |
 | `GET` | `/api/files` | List generated output files |
-| `GET` | `/api/files/{filename}` | Retrieve file content |
-| `POST` | `/api/feedback` | Rate a run (creates `user_preference` memory) |
-| `GET` | `/api/memory/episodes` | Browse past executions |
-| `GET` | `/api/memory/search?query=...` | Semantic search across memory |
+| `GET` | `/api/files/{filename}` | Read a file from `output/` (10 MB cap, extension allowlist) |
+| `POST` | `/api/feedback` | Submit a rating for a completed run |
+| `GET` | `/api/memory/episodes` | List past executions (limit 1–500) |
+| `GET` | `/api/memory/search` | Semantic search across all memory (n_results 1–50) |
 | `GET` | `/api/memory/stats` | Memory system statistics |
+| `POST` | `/api/agents/{agent_id}/upload` | Upload a file to an agent's RAG knowledge base |
+| `POST` | `/api/agents/{agent_id}/query` | Query an agent's RAG knowledge base |
+| `GET` | `/api/agents/{agent_id}/files` | List files indexed for an agent |
+| `GET` | `/api/agents/{agent_id}/info` | Get agent spec + output from active session |
+
+All error responses use proper HTTP status codes: 400 (bad input), 403 (access denied), 404 (not found), 413 (too large), 422 (processing error), 500 (server error).
 
 ### WebSocket
 
 ```
-WebSocket /ws
-Send:    {"task": "<string>"}
-Receive: {"type": "<event>", "data": {...}, "ts": "<ISO>"}
+WS /ws
+Client sends:  {"task": "<string>"}
+Server sends:  {"type": "<event_type>", "data": {...}, "ts": "<ISO timestamp>"}
 ```
 
-**Streamed event types:** `pipeline_start`, `quick_detect_start/done`, `quick_action`, `debate_start`, `debate_da_response`, `debate_eval_response`, `debate_complete`, `forge_start`, `forge_tool_start/done`, `forge_complete`, `graph_built`, `agent_token`, `agent_tool_call`, `agent_tool_result`, `compile_start/done`, `memory_recall/store`, `episode_saved`, `pipeline_done/error`
+**Event stream:**
+
+```
+pipeline_start
+  quick_detect_start → quick_detect_done
+    [quick path]  quick_start → quick_action(×N) → quick_done
+    [full path]   memory_recall
+                  debate_start → debate_da_response → debate_eval_response → ... → debate_complete
+                  forge_start → forge_tool_start(×N) → forge_tool_done(×N) → forge_complete
+                  agents_created
+                  agent_start → agent_token(×N) → agent_tool_call → agent_tool_result → agent_done
+                  memory_store
+                  compile_start → compile_done
+                  episode_saved
+pipeline_done | pipeline_error
+```
 
 ---
 
-## Setup & Installation
+## Setup
 
-### Prerequisites
+### Requirements
 
 - Python 3.10+
 - OpenAI API key
-
-### Install
 
 ```bash
 git clone <repo-url>
@@ -188,82 +377,58 @@ cp .env.example .env
 ### Environment Variables
 
 **Required:**
-
 ```env
 OPENAI_API_KEY=sk-...
 ```
 
 **Optional integrations:**
-
 ```env
-# Email (degrades to draft files if not set)
+# Email — degrades to draft files if not set
 SMTP_HOST=smtp.gmail.com
 SMTP_PORT=587
 SMTP_USER=you@example.com
-SMTP_PASS=app-password
+SMTP_PASS=your-app-password
 SMTP_FROM=you@example.com
 
-# Slack (degrades to draft files if not set)
-SLACK_WEBHOOK_URL=https://hooks.slack.com/...
-
-# Google Calendar (optional — .ics always works)
-GOOGLE_CALENDAR_CREDENTIALS=path/to/service-account.json
+# Slack — degrades to draft files if not set
+SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...
 
 # MCP servers config
 MCP_CONFIG_PATH=mcp_servers.json
 ```
 
-### MCP Servers (optional)
-
+**Optional MCP servers:**
 ```bash
 cp mcp_servers.json.example mcp_servers.json
-# Edit to enable filesystem, Slack, GitHub, Notion, etc.
+# Enable filesystem, Slack, GitHub, Notion, etc.
 ```
 
----
-
-## Running HiveMind
-
-### Web UI (recommended)
+### Running
 
 ```bash
+# Web server (recommended — real-time streaming UI)
 python run_server.py
 # Open http://localhost:8000
-```
 
-Enter a task, watch the full pipeline execute in real time — debate rounds with plan diffs, tool forge progress, streaming agent tokens — then chat with individual agents post-run.
+# CLI
+python main.py "Plan a product launch for a B2B SaaS tool"
 
-### CLI
-
-```bash
-# Default demo task
-python main.py
-
-# Custom task
-python main.py "Build a competitive analysis of three SaaS CRMs"
-```
-
-### Benchmark
-
-```bash
-# Compare single-LLM vs full pipeline
+# Benchmark (single LLM vs full pipeline)
 python evaluate.py
-
-# Run full benchmark suite
 python run_benchmark.py
 ```
 
 ---
 
-## System Config
+## System Configuration
 
-Defaults in [orchestrator/config.py](orchestrator/config.py):
+[orchestrator/config.py](orchestrator/config.py):
 
 ```python
-PLANNER_MODEL   = "gpt-4o"
-EVALUATOR_MODEL = "gpt-4o"
-COMPILER_MODEL  = "gpt-4o"
-FORGE_MODEL     = "gpt-4o"
+PLANNER_MODEL   = "gpt-4o"    # DA + Quick Classifier
+EVALUATOR_MODEL = "gpt-4o"    # EA
+COMPILER_MODEL  = "gpt-4o"    # Compiler
+FORGE_MODEL     = "gpt-4o"    # Tool Forge
 
 TIER_TO_MODEL = {
     "FAST":     "gpt-4o-mini",
@@ -273,35 +438,42 @@ TIER_TO_MODEL = {
 
 MAX_DEBATE_ROUNDS = 3
 MAX_AGENTS        = 8
-MAX_AGENT_STEPS   = 25
+MAX_AGENT_STEPS   = 25   # LangGraph recursion limit per agent
 ```
 
 ---
 
-## Safety
+## Security
 
-The Tool Forge validates all LLM-generated code before execution:
+### Tool Forge AST Validation
 
-- **Syntax check:** `ast.parse()` on every generated function
-- **Forbidden imports blocked:** `subprocess`, `shutil`, `ctypes`, `importlib`, `pickle`, `shelve`, `multiprocessing`, `signal`, `socket`
-- **Forbidden calls blocked:** `os.system`, `os.remove`, `__import__`, `eval`, `exec`
-- **File I/O sandboxed** to the `output/` directory
-- **Session TTL:** Sessions expire after 1 hour; max 20 concurrent sessions
-- **Tool error wrapping:** All tool exceptions caught and stringified — agents never crash on tool failure
+Every LLM-generated function is validated before execution. The AST visitor blocks:
+
+- **Forbidden imports:** `subprocess`, `shutil`, `ctypes`, `importlib`, `pickle`, `shelve`, `multiprocessing`, `signal`, `socket`
+- **Forbidden calls:** `os.system`, `os.remove`, `os.rmdir`, `os.unlink`, `shutil.rmtree`, `__import__`, `eval`, `exec`
+
+Generated code runs in a capability namespace with only the 13 pre-approved functions available — it cannot import arbitrary modules.
+
+### API Layer
+
+- Input validation on all request models via Pydantic `@field_validator`
+- File access sandboxed to `output/` with `os.path.realpath` traversal check
+- File extension allowlist (`.txt`, `.md`, `.json`, `.csv`, `.html`, `.ics`, `.xlsx`, `.py`)
+- 10 MB upload and file-read size cap
+- Session TTL: 1 hour; max 20 concurrent sessions with LRU eviction
+- All errors returned as structured HTTP exceptions with appropriate status codes
 
 ---
 
 ## Competitive Positioning
 
-| System | Gap HiveMind fills |
+| System | What HiveMind adds |
 |---|---|
-| LangGraph | No native adversarial debate; new templates still require predefined patterns |
-| CrewAI | Static roster; no plan validation; no cross-run memory |
-| AutoGen v0.4 | Group chat is unstructured — no confidence-scored approval gate |
-| Reflexion | Same agent critiques itself, sharing the proposer's biases |
-| MetaGPT | Domain-specific to code generation; no general-purpose spawning |
-
-**HiveMind is the only system combining adversarial debate + plan-driven dynamic tool forging + context-aware memory + persistent cross-run learning on top of LangGraph with MCP interoperability.**
+| LangGraph | Adversarial debate gate; dynamic agent spawning; runtime tool synthesis |
+| CrewAI | No static roster; plan validation before execution; cross-run memory |
+| AutoGen | Structured confidence-scored approval gate vs. unstructured group chat |
+| Reflexion | Separate adversarial critic vs. same-agent self-reflection |
+| MetaGPT | General-purpose, not code-generation-specific |
 
 ---
 
@@ -312,8 +484,9 @@ The Tool Forge validates all LLM-generated code before execution:
 | Orchestration | LangGraph 1.0+, LangChain 1.2+ |
 | LLM | OpenAI GPT-4o (gpt-4o-mini for FAST tier) |
 | Backend | FastAPI 0.110+, Uvicorn, Pydantic 2.0+ |
-| Memory | SQLite (episodic), ChromaDB (vector search) |
+| Memory | SQLite (episodic store), ChromaDB (vector search) |
+| RAG | ChromaDB + pdfplumber + openpyxl |
 | Integrations | SMTP, Slack webhooks, iCalendar, openpyxl, pdfplumber |
-| MCP | `mcp` 1.0+ |
+| MCP | `mcp` 1.0+ (stdio + SSE) |
 | Frontend | Vanilla HTML/CSS/JS, WebSocket, Marked.js |
-| Search | DuckDuckGo (primary), Tavily (optional) |
+| Search | DuckDuckGo (primary), requests (scraping) |
