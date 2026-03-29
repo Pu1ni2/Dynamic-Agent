@@ -3,24 +3,17 @@ from .config import DEBATE_MODEL, MAX_ROUNDS
 from .llm_client import call_llm_json
 
 
+def _emit(emitter, event: dict):
+    if emitter:
+        try:
+            emitter(event)
+        except Exception:
+            pass
+
+
 def run_debate(task: str, generator_prompt: str, critic_prompt: str,
-               modified_key: str, input_context: str = "") -> dict:
-    """
-    Generic debate loop — works for both requirements (Phase 1-2)
-    and plan (Phase 3-4).
-
-    Args:
-        task:             The original user task.
-        generator_prompt: System prompt for the DA (generator side).
-        critic_prompt:    System prompt for the Evaluator (critic side).
-        modified_key:     Key the evaluator uses for its output
-                          ("modified_requirements" or "modified_plan").
-        input_context:    Extra context to prepend (e.g. approved requirements
-                          when debating the plan).
-
-    Returns:
-        The evaluator's approved output (or last version if max rounds hit).
-    """
+               modified_key: str, input_context: str = "",
+               emitter=None, phase_name: str = "") -> dict:
     history = []
     result = None
     user_content = f"Task: {task}"
@@ -29,6 +22,7 @@ def run_debate(task: str, generator_prompt: str, critic_prompt: str,
 
     for round_num in range(1, MAX_ROUNDS + 1):
         print(f"\n  Round {round_num}/{MAX_ROUNDS}")
+        _emit(emitter, {"type": "debate_round", "phase": phase_name, "round": round_num})
 
         # Generator (DA) proposes
         gen_messages = _build_messages(user_content, history, "generator")
@@ -38,11 +32,18 @@ def run_debate(task: str, generator_prompt: str, critic_prompt: str,
             gen_response = call_llm_json(DEBATE_MODEL, gen_messages)
         except Exception as e:
             print(f"  [DA] Error: {e}")
+            if result is None:
+                raise RuntimeError(f"DA failed on round {round_num}: {e}") from e
             break
 
         history.append({"role": "generator", "content": json.dumps(gen_response)})
         result = gen_response
         print(f"  [DA] Proposed")
+        _emit(emitter, {
+            "type": "da_message",
+            "phase": phase_name,
+            "content": json.dumps(gen_response, indent=2),
+        })
 
         # Critic (Evaluator) reviews
         crit_messages = _build_messages(user_content, history, "critic")
@@ -52,19 +53,30 @@ def run_debate(task: str, generator_prompt: str, critic_prompt: str,
             crit_response = call_llm_json(DEBATE_MODEL, crit_messages)
         except Exception as e:
             print(f"  [Evaluator] Error: {e}")
-            break
+            break  # result is at least the gen_response here, so safe to fall through
 
         history.append({"role": "critic", "content": json.dumps(crit_response)})
 
-        if crit_response.get("approved"):
+        approved = crit_response.get("approved", False)
+        critique = crit_response.get("critique", "")
+        _emit(emitter, {
+            "type": "evaluator_message",
+            "phase": phase_name,
+            "content": json.dumps(crit_response, indent=2),
+            "approved": approved,
+            "critique": critique,
+        })
+
+        if approved:
             print(f"  [Evaluator] APPROVED")
+            _emit(emitter, {"type": "debate_approved", "phase": phase_name})
             return crit_response.get(modified_key, result)
 
         result = crit_response.get(modified_key, result)
-        critique = crit_response.get("critique", "")
         print(f"  [Evaluator] REJECTED — {critique[:100]}")
 
     print(f"  Max rounds reached. Using last version.")
+    _emit(emitter, {"type": "debate_approved", "phase": phase_name})
     return result
 
 

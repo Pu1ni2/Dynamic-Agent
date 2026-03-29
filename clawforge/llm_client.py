@@ -12,15 +12,19 @@ def get_client() -> OpenAI:
     return _client
 
 
-def call_llm(model: str, messages: list, json_mode: bool = False, max_tokens: int = 2048) -> str:
-    kwargs = {"model": model, "messages": messages, "max_tokens": max_tokens}
-    if json_mode:
-        kwargs["response_format"] = {"type": "json_object"}
-
-    response = get_client().chat.completions.create(**kwargs)
+def call_llm(model: str, messages: list, max_tokens: int = 2048) -> str:
+    response = get_client().chat.completions.create(
+        model=model,
+        messages=messages,
+        max_tokens=max_tokens,
+    )
     return response.choices[0].message.content
 
 
 def call_llm_json(model: str, messages: list, max_tokens: int = 2048) -> dict:
-    raw = call_llm(model, messages, json_mode=True, max_tokens=max_tokens)
-    return json.loads(raw)
+    raw = call_llm(model, messages, max_tokens=max_tokens)
+    # Strip markdown code fences if the model wraps the JSON
+    stripped = raw.strip()
+    if stripped.startswith("```"):
+        stripped = stripped.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+    return json.loads(stripped)

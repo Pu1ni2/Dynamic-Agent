@@ -11,19 +11,20 @@ if ssl_cert and not os.path.exists(ssl_cert):
 # Debate settings
 MAX_ROUNDS = int(os.getenv("MAX_ROUNDS", "3"))
 
-# API settings — OpenAI only
-API_KEY = os.getenv("OPENAI_API_KEY")
-BASE_URL = "https://api.openai.com/v1"
+# API settings — OpenRouter
+API_KEY = os.getenv("OPENROUTER_API_KEY")
+BASE_URL = "https://openrouter.ai/api/v1"
 
 # Model for debate phases (DA + Evaluator in Phase 1-4)
-DEBATE_MODEL = "gpt-4o"
+DEBATE_MODEL = "anthropic/claude-3-5-sonnet-20241022"
 
 # Model for DA validation/compilation (Phase 6)
-VALIDATION_MODEL = "gpt-4o"
+VALIDATION_MODEL = "anthropic/claude-3-5-sonnet-20241022"
 
 # Model tiers for sub-agents (Phase 5)
 TIER_TO_MODEL = {
-    "FAST": "gpt-4o-mini",
-    "BALANCED": "gpt-4o",
-    "HEAVY": "gpt-4o",
+    "FAST": "anthropic/claude-3-5-haiku-20241022",
+    "BALANCED": "anthropic/claude-3-5-sonnet-20241022",
+    "HEAVY": "anthropic/claude-3-5-sonnet-20241022",
 }
+

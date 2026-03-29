@@ -6,26 +6,25 @@ from .prompts import DA_COMPILE_FINAL_OUTPUT_PROMPT
 from .sub_agent import SubAgent
 
 
+def _emit(emitter, event: dict):
+    if emitter:
+        try:
+            emitter(event)
+        except Exception:
+            pass
+
+
 class DynamicAgent:
-    def __init__(self, plan: dict, tool_executor=None):
-        """
-        Args:
-            plan: Full pipeline context. Keys:
-                  task, requirements, plan (list of agents),
-                  execution_strategy
-            tool_executor: function(tool_name, tool_args) -> str
-        """
+    def __init__(self, plan: dict, tool_executor=None, emitter=None):
         self.task = plan["task"]
         self.requirements = plan.get("requirements", {})
         self.agents_config = plan["plan"]
         self.execution_strategy = plan.get("execution_strategy", {})
         self.tool_executor = tool_executor
+        self.emitter = emitter
 
     def run(self) -> dict:
-        # Build agent configs with resolved models
         agents = self._resolve_agents()
-
-        # Execute based on parallel groups
         parallel_groups = self.execution_strategy.get("parallel_groups", {})
 
         if parallel_groups:
@@ -33,12 +32,10 @@ class DynamicAgent:
         else:
             results = self._run_sequential(agents)
 
-        # Phase 6: DA validates and compiles
         validated = self._validate(results)
         return validated
 
     def _resolve_agents(self) -> dict:
-        """Convert plan agents into a dict keyed by id, with model resolved."""
         agents = {}
         for a in self.agents_config:
             a["model"] = TIER_TO_MODEL.get(a.get("model_tier", "BALANCED"), TIER_TO_MODEL["BALANCED"])
@@ -46,8 +43,7 @@ class DynamicAgent:
         return agents
 
     def _run_grouped(self, agents: dict, parallel_groups: dict) -> dict:
-        """Run agents by parallel groups. Groups run sequentially, agents within a group run in parallel."""
-        outputs = {}  # agent_id -> output
+        outputs = {}
 
         for group_num in sorted(parallel_groups.keys(), key=lambda x: int(x)):
             agent_ids = parallel_groups[group_num]
@@ -61,49 +57,74 @@ class DynamicAgent:
                     context = self._build_context(config, outputs)
                     agent = SubAgent(config, tool_executor=self.tool_executor)
                     print(f"  [{agent.role}] running...")
+                    _emit(self.emitter, {
+                        "type": "agent_started",
+                        "agent_id": str(config["id"]),
+                        "role": config["role"],
+                    })
                     futures[pool.submit(agent.run, self.task, context)] = config
 
                 for future in concurrent.futures.as_completed(futures):
                     config = futures[future]
-                    output = future.result()
+                    try:
+                        output = future.result()
+                    except Exception as e:
+                        output = f"Error: {e}"
                     outputs[config["id"]] = {"role": config["role"], "output": output}
                     print(f"  [{config['role']}] done")
+                    _emit(self.emitter, {
+                        "type": "agent_done",
+                        "agent_id": str(config["id"]),
+                        "role": config["role"],
+                        "output": output,
+                    })
 
         return outputs
 
     def _run_sequential(self, agents: dict) -> dict:
-        """Fallback: run all agents one by one."""
         outputs = {}
         for agent_id, config in agents.items():
             context = self._build_context(config, outputs)
             agent = SubAgent(config, tool_executor=self.tool_executor)
             print(f"\n  [{agent.role}] running...")
+            _emit(self.emitter, {
+                "type": "agent_started",
+                "agent_id": str(agent_id),
+                "role": config["role"],
+            })
             output = agent.run(self.task, context)
             outputs[agent_id] = {"role": config["role"], "output": output}
             print(f"  [{config['role']}] done")
+            _emit(self.emitter, {
+                "type": "agent_done",
+                "agent_id": str(agent_id),
+                "role": config["role"],
+                "output": output,
+            })
         return outputs
 
     def _build_context(self, config: dict, outputs: dict) -> str:
-        """Build context string from agents this one depends on."""
         deps = config.get("context_from_agents", [])
         if not deps:
             return ""
-
         parts = []
         for dep_id in deps:
             if dep_id in outputs:
                 dep = outputs[dep_id]
                 parts.append(f"[{dep['role']}]:\n{dep['output']}")
-
         return "\n\n".join(parts)
 
     def _validate(self, outputs: dict) -> dict:
-        """Phase 6: DA compiles and validates all sub-agent outputs."""
         agent_outputs = ""
         for aid, data in outputs.items():
             agent_outputs += f"\n[Agent {aid} — {data['role']}]:\n{data['output']}\n"
 
         print("\n  [DA] Validating and compiling final output...")
+        _emit(self.emitter, {
+            "type": "phase_start",
+            "phase": "assembly",
+            "label": "Final Assembly",
+        })
 
         result = call_llm_json(
             VALIDATION_MODEL,
@@ -119,8 +140,16 @@ class DynamicAgent:
         )
 
         print("  [DA] Validation complete")
+        final_output = result.get("final_output", "")
+        _emit(self.emitter, {
+            "type": "final_output",
+            "content": final_output,
+            "coverage_report": result.get("coverage_report", {}),
+            "known_issues": result.get("known_issues", []),
+        })
+
         return {
-            "final_output": result.get("final_output", ""),
+            "final_output": final_output,
             "coverage_report": result.get("coverage_report", {}),
             "known_issues": result.get("known_issues", []),
             "agent_outputs": outputs,

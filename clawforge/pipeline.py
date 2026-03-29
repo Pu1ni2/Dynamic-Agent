@@ -1,5 +1,5 @@
 import json
-from .debate import run_debate
+from .debate import run_debate, _emit
 from .dynamic_agent import DynamicAgent
 from .prompts import (
     DA_GENERATE_REQUIREMENTS_PROMPT,
@@ -9,40 +9,39 @@ from .prompts import (
 )
 
 
-def run_pipeline(task: str, tool_executor=None) -> dict:
-    """
-    Full ClawForge pipeline:
-        Phase 1-2: Debate requirements
-        Phase 3-4: Debate sub-agent plan
-        Phase 5:   Execute sub-agents
-        Phase 6:   DA validates and compiles final output
-
-    Args:
-        task:          The user's request.
-        tool_executor: function(tool_name, tool_args) -> str (from LangGraph).
-
-    Returns:
-        Dict with final_output, coverage_report, known_issues, agent_outputs.
-    """
-
-    # Phase 1-2: Requirements debate
+def run_pipeline(task: str, tool_executor=None, emitter=None) -> dict:
+    # ── Phase 1-2: Requirements Debate ──────────────────────────────────────
     print("\n" + "=" * 60)
     print("  PHASE 1-2: Requirements Debate")
     print("=" * 60)
+
+    _emit(emitter, {
+        "type": "phase_start",
+        "phase": "debate_requirements",
+        "label": "Requirements Debate",
+    })
 
     requirements = run_debate(
         task=task,
         generator_prompt=DA_GENERATE_REQUIREMENTS_PROMPT,
         critic_prompt=EVALUATOR_CRITIQUE_REQUIREMENTS_PROMPT,
         modified_key="modified_requirements",
+        emitter=emitter,
+        phase_name="requirements",
     )
 
     print(f"\n  Requirements approved.")
 
-    # Phase 3-4: Plan debate
+    # ── Phase 3-4: Plan Debate ───────────────────────────────────────────────
     print("\n" + "=" * 60)
     print("  PHASE 3-4: Sub-Agent Plan Debate")
     print("=" * 60)
+
+    _emit(emitter, {
+        "type": "phase_start",
+        "phase": "debate_plan",
+        "label": "Sub-Agent Plan Debate",
+    })
 
     req_context = f"Approved Requirements:\n{json.dumps(requirements, indent=2)}"
 
@@ -52,17 +51,37 @@ def run_pipeline(task: str, tool_executor=None) -> dict:
         critic_prompt=EVALUATOR_CRITIQUE_SUBAGENTS_PROMPT,
         modified_key="modified_plan",
         input_context=req_context,
+        emitter=emitter,
+        phase_name="plan",
     )
 
-    agents_list = plan_result.get("plan", [])
-    execution_strategy = plan_result.get("execution_strategy", {})
+    agents_list = plan_result.get("plan", []) if plan_result else []
+    execution_strategy = plan_result.get("execution_strategy", {}) if plan_result else {}
 
     print(f"\n  Plan approved: {len(agents_list)} agents")
 
-    # Phase 5-6: Execute sub-agents + DA validation
+    _emit(emitter, {
+        "type": "agents_spawned",
+        "agents": [
+            {
+                "id": str(a.get("id", i)),
+                "role": a.get("role", f"Agent {i}"),
+                "model_tier": a.get("model_tier", "BALANCED"),
+            }
+            for i, a in enumerate(agents_list)
+        ],
+    })
+
+    # ── Phase 5-6: Execute + Assemble ────────────────────────────────────────
     print("\n" + "=" * 60)
     print("  PHASE 5-6: Execution + Validation")
     print("=" * 60)
+
+    _emit(emitter, {
+        "type": "phase_start",
+        "phase": "execution",
+        "label": "Parallel Execution",
+    })
 
     full_plan = {
         "task": task,
@@ -71,7 +90,7 @@ def run_pipeline(task: str, tool_executor=None) -> dict:
         "execution_strategy": execution_strategy,
     }
 
-    da = DynamicAgent(full_plan, tool_executor=tool_executor)
+    da = DynamicAgent(full_plan, tool_executor=tool_executor, emitter=emitter)
     result = da.run()
 
     print("\n" + "=" * 60)
